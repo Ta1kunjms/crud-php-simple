@@ -1,0 +1,235 @@
+:root {
+    --bg-1: #f3f7ff;
+    --bg-2: #e8fff8;
+    --surface: #ffffff;
+    --surface-alt: #f8faff;
+    --text: #14213d;
+    --muted: #5b6b88;
+    --primary: #0f766e;
+    --primary-dark: #0b5f58;
+    --danger: #b42318;
+    --danger-dark: #8f1f16;
+    --border: #dfe7f5;
+    --shadow: 0 12px 32px rgba(20, 33, 61, 0.12);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--text);
+    background: radial-gradient(circle at 15% 15%, var(--bg-2), transparent 35%),
+        radial-gradient(circle at 85% 20%, #fff6e8, transparent 40%),
+        linear-gradient(140deg, var(--bg-1), #f9fbff 55%, #f2fff9);
+    padding: 28px 14px;
+}
+
+.page-wrapper {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+}
+
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+h1,
+h2 {
+    margin: 0;
+}
+
+h1 {
+    font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+.subtitle {
+    margin-top: 6px;
+    color: var(--muted);
+}
+
+.credit {
+    background: #ffffffcc;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 0.76rem;
+    backdrop-filter: blur(5px);
+}
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 18px;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface-alt);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+th,
+td {
+    padding: 12px;
+    text-align: left;
+}
+
+th {
+    background: #eef4ff;
+    color: #20345f;
+    font-size: 0.9rem;
+}
+
+tbody tr {
+    border-top: 1px solid var(--border);
+}
+
+tbody tr:hover {
+    background: #f3f8ff;
+}
+
+.actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn {
+    border: none;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    padding: 9px 12px;
+    display: inline-block;
+    cursor: pointer;
+    transition: 0.2s ease;
+    font-size: 0.9rem;
+}
+
+.btn-primary {
+    background: var(--primary);
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: var(--primary-dark);
+    transform: translateY(-1px);
+}
+
+.btn-soft {
+    background: #dbeafe;
+    color: #1e3a8a;
+}
+
+.btn-soft:hover {
+    background: #c7dcff;
+}
+
+.btn-danger {
+    background: var(--danger);
+    color: #fff;
+}
+
+.btn-danger:hover {
+    background: var(--danger-dark);
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+}
+
+label {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 6px;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="number"] {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+    outline: none;
+    background: #fff;
+}
+
+input:focus {
+    border-color: #99b7ff;
+    box-shadow: 0 0 0 3px #dbe8ff;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+
+.message {
+    padding: 14px;
+    border-radius: 10px;
+    margin-bottom: 14px;
+    border: 1px solid;
+}
+
+.message-success {
+    background: #ecfdf3;
+    border-color: #abefc6;
+    color: #05603a;
+}
+
+.message-error {
+    background: #fef3f2;
+    border-color: #fecdca;
+    color: #912018;
+}
+
+.back-link {
+    color: #2058b3;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.back-link:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 700px) {
+    .topbar,
+    .card-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

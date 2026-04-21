@@ -3,7 +3,12 @@
 require_once("dbConnection.php");
 
 // Get id from URL parameter
-$id = $_GET['id'];
+$id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
+
+if ($id <= 0) {
+	header("Location:index.php");
+	exit;
+}
 
 // Select data associated with this particular id
 $result = mysqli_query($mysqli, "SELECT * FROM users WHERE id = $id");
@@ -15,36 +20,47 @@ $name = $resultData['name'];
 $age = $resultData['age'];
 $email = $resultData['email'];
 ?>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>	
-	<title>Edit Data</title>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Edit User</title>
+	<link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-    <h2>Edit Data</h2>
-    <p>
-	    <a href="index.php">Home</a>
-    </p>
-	
-	<form name="edit" method="post" action="editAction.php">
-		<table border="0">
-			<tr> 
-				<td>Name</td>
-				<td><input type="text" name="name" value="<?php echo $name; ?>"></td>
-			</tr>
-			<tr> 
-				<td>Age</td>
-				<td><input type="text" name="age" value="<?php echo $age; ?>"></td>
-			</tr>
-			<tr> 
-				<td>Email</td>
-				<td><input type="text" name="email" value="<?php echo $email; ?>"></td>
-			</tr>
-			<tr>
-				<td><input type="hidden" name="id" value=<?php echo $id; ?>></td>
-				<td><input type="submit" name="update" value="Update"></td>
-			</tr>
-		</table>
-	</form>
+	<div class="page-wrapper">
+		<header class="topbar">
+			<div>
+				<h1>Edit User</h1>
+				<p class="subtitle">Update details and save changes</p>
+			</div>
+			<div class="credit">TYCOON JAMES FLORES</div>
+		</header>
+
+		<main class="card">
+			<p><a class="back-link" href="index.php">Back to Dashboard</a></p>
+			<form name="edit" method="post" action="editAction.php" class="form-grid">
+				<div>
+					<label for="name">Name</label>
+					<input type="text" id="name" name="name" value="<?php echo htmlspecialchars($name); ?>" required>
+				</div>
+				<div>
+					<label for="age">Age</label>
+					<input type="number" id="age" name="age" min="1" value="<?php echo htmlspecialchars($age); ?>" required>
+				</div>
+				<div>
+					<label for="email">Email</label>
+					<input type="email" id="email" name="email" value="<?php echo htmlspecialchars($email); ?>" required>
+				</div>
+				<input type="hidden" name="id" value="<?php echo $id; ?>">
+				<div class="form-actions">
+					<button class="btn btn-primary" type="submit" name="update">Update User</button>
+					<a class="btn btn-soft" href="index.php">Cancel</a>
+				</div>
+			</form>
+		</main>
+	</div>
 </body>
 </html>
