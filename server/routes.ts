@@ -67,8 +67,9 @@ import {
   DEFAULT_GOOGLE_CALLBACK_URL,
 } from "./auth";
 import { computeProfileCompleteness } from "./utils/status";
-import { uploadEmployerDocs, formatFileMetadata, getFileUrl } from "./fileUpload";
+import { uploadEmployerDocs, formatEmployerDocMetadata } from "./fileUpload";
 import path from "path";
+import { createSupabaseAnonClient, isSupabaseConfigured } from "./supabase";
 
 type JobseekerAccount = {
   id: string;
@@ -2308,6 +2309,124 @@ export function registerRoutes(app: express.Express) {
   // POST /api/auth/signup/jobseeker
   app.post("/api/auth/signup/jobseeker", async (req: Request, res: Response) => {
     try {
+      // If Supabase is configured, use Supabase Auth for identity and keep DB as the profile store.
+      if (isSupabaseConfigured()) {
+        const payload = req.body || {};
+        const rawName = typeof payload.name === "string" ? payload.name.trim() : "";
+        const derivedFirst = payload.firstName?.trim() || rawName.split(" ")[0];
+        const derivedLast = payload.lastName?.trim() || rawName.split(" ").slice(1).join(" ").trim();
+        const { email, password } = payload;
+        const userRole = payload.role || "jobseeker";
+
+        if (!derivedFirst || !derivedLast || !email || !password) {
+          return sendValidationError(res, "All fields are required");
+        }
+
+        const trimmedEmail = String(email).trim().toLowerCase();
+        if (!validateEmail(trimmedEmail)) {
+          return sendValidationError(res, "Invalid email format", "email");
+        }
+
+        const passwordValidation = validatePassword(password);
+        if (!passwordValidation.isValid) {
+          return res
+            .status(400)
+            .json(createErrorResponse(ErrorCodes.MISSING_FIELD, passwordValidation.errors.join("; "), "password"));
+        }
+
+        const supabase = createSupabaseAnonClient();
+
+        const signUpResult = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+          options: {
+            data: {
+              role: userRole,
+              firstName: derivedFirst,
+              lastName: derivedLast,
+            },
+          },
+        });
+
+        if (signUpResult.error) {
+          return res
+            .status(400)
+            .json(createErrorResponse(ErrorCodes.INVALID_FORMAT, signUpResult.error.message));
+        }
+
+        // Immediately sign-in to obtain an access token.
+        const signInResult = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
+        if (signInResult.error || !signInResult.data.session) {
+          return res
+            .status(400)
+            .json(createErrorResponse(
+              ErrorCodes.INVALID_CREDENTIALS,
+              signInResult.error?.message || "Unable to create session. If Supabase email confirmation is enabled, disable it for password signup flows."
+            ));
+        }
+
+        const session = signInResult.data.session;
+        const authUserId = session.user.id;
+        const now = new Date();
+
+        const db = await storage.getDb();
+        const existing = await db
+          .select({ id: usersTable.id, hasAccount: usersTable.hasAccount })
+          .from(usersTable)
+          .where(eq(usersTable.email, trimmedEmail))
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+
+        // To keep IDs consistent with Supabase, we require the profile row to use the Supabase UUID.
+        if (existing && existing.id !== authUserId) {
+          return res.status(400).json(
+            createErrorResponse(
+              ErrorCodes.DUPLICATE_EMAIL,
+              "Email already exists in local profiles with a different id. Clear/migrate your database before switching to Supabase Auth.",
+              "email"
+            )
+          );
+        }
+
+        if (existing) {
+          await db
+            .update(usersTable)
+            .set({
+              firstName: derivedFirst,
+              surname: derivedLast,
+              email: trimmedEmail,
+              role: userRole as any,
+              hasAccount: true,
+              updatedAt: now,
+            })
+            .where(eq(usersTable.id, existing.id));
+        } else {
+          await db.insert(usersTable).values({
+            id: authUserId,
+            firstName: derivedFirst,
+            surname: derivedLast,
+            email: trimmedEmail,
+            passwordHash: "", // Supabase stores credentials; keep empty to avoid local password usage.
+            role: userRole as any,
+            hasAccount: true,
+            registrationDate: now,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+
+        const fullName = `${derivedFirst} ${derivedLast}`.trim();
+        return res.json({
+          token: session.access_token,
+          user: {
+            id: authUserId,
+            name: fullName,
+            email: trimmedEmail,
+            role: userRole,
+          },
+        });
+      }
+
       const payload = req.body || {};
       const rawName = typeof payload.name === "string" ? payload.name.trim() : "";
       const derivedFirst = payload.firstName?.trim() || rawName.split(" ")[0];
@@ -2433,6 +2552,108 @@ export function registerRoutes(app: express.Express) {
   // POST /api/auth/signup/employer
   app.post("/api/auth/signup/employer", async (req: Request, res: Response) => {
     try {
+      if (isSupabaseConfigured()) {
+        const { name, email, password, company } = req.body;
+
+        if (!name || !email || !password || !company) {
+          return sendValidationError(res, "Name, email, password, and company are required");
+        }
+
+        const trimmedEmail = String(email).trim().toLowerCase();
+        if (!validateEmail(trimmedEmail)) {
+          return sendValidationError(res, "Invalid email format", "email");
+        }
+
+        const passwordValidation = validatePassword(password);
+        if (!passwordValidation.isValid) {
+          return sendValidationError(res, passwordValidation.errors.join("; "), "password");
+        }
+
+        const supabase = createSupabaseAnonClient();
+        const signUpResult = await supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+          options: {
+            data: {
+              role: "employer",
+              name,
+              company,
+            },
+          },
+        });
+        if (signUpResult.error) {
+          return res.status(400).json(createErrorResponse(ErrorCodes.INVALID_FORMAT, signUpResult.error.message));
+        }
+
+        const signInResult = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
+        if (signInResult.error || !signInResult.data.session) {
+          return res
+            .status(400)
+            .json(createErrorResponse(
+              ErrorCodes.INVALID_CREDENTIALS,
+              signInResult.error?.message || "Unable to create session. If Supabase email confirmation is enabled, disable it for password signup flows."
+            ));
+        }
+
+        const session = signInResult.data.session;
+        const authUserId = session.user.id;
+        const now = new Date();
+
+        const db = await storage.getDb();
+        const existing = await db
+          .select({ id: employersTable.id })
+          .from(employersTable)
+          .where(sql`lower(${employersTable.email}) = ${trimmedEmail}`)
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+        if (existing && existing.id !== authUserId) {
+          return res.status(400).json(
+            createErrorResponse(
+              ErrorCodes.DUPLICATE_EMAIL,
+              "Email already exists in local employer profiles with a different id. Clear/migrate your database before switching to Supabase Auth.",
+              "email"
+            )
+          );
+        }
+
+        if (existing) {
+          await db
+            .update(employersTable)
+            .set({
+              establishmentName: company,
+              name,
+              email: trimmedEmail,
+              hasAccount: true,
+              accountStatus: "pending",
+              updatedAt: now,
+            })
+            .where(eq(employersTable.id, existing.id));
+        } else {
+          await db.insert(employersTable).values({
+            id: authUserId,
+            establishmentName: company,
+            name,
+            email: trimmedEmail,
+            passwordHash: "",
+            hasAccount: true,
+            accountStatus: "pending",
+            createdBy: "self",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+
+        return res.json({
+          token: session.access_token,
+          user: {
+            id: authUserId,
+            name,
+            email: trimmedEmail,
+            role: "employer",
+          },
+        });
+      }
+
       const { name, email, password, company } = req.body;
 
       if (!name || !email || !password || !company) {
@@ -2504,6 +2725,94 @@ export function registerRoutes(app: express.Express) {
   // POST /api/auth/signup/admin (controlled - for setup only)
   app.post("/api/auth/signup/admin", async (req: Request, res: Response) => {
     try {
+      if (isSupabaseConfigured()) {
+        const payload = adminCreateSchema.parse(req.body);
+
+        if (!validateEmail(payload.email)) {
+          return sendValidationError(res, "Invalid email format", "email");
+        }
+
+        const passwordValidation = validatePassword(payload.password);
+        if (!passwordValidation.isValid) {
+          return sendValidationError(res, passwordValidation.errors.join("; "), "password");
+        }
+
+        const normalizedEmail = payload.email.trim().toLowerCase();
+        const supabase = createSupabaseAnonClient();
+
+        const signUpResult = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password: payload.password,
+          options: {
+            data: {
+              role: "admin",
+              name: payload.name,
+            },
+          },
+        });
+        if (signUpResult.error) {
+          return res.status(400).json(createErrorResponse(ErrorCodes.INVALID_FORMAT, signUpResult.error.message));
+        }
+
+        const signInResult = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: payload.password });
+        if (signInResult.error || !signInResult.data.session) {
+          return res
+            .status(400)
+            .json(createErrorResponse(
+              ErrorCodes.INVALID_CREDENTIALS,
+              signInResult.error?.message || "Unable to create session. If Supabase email confirmation is enabled, disable it for password signup flows."
+            ));
+        }
+
+        const session = signInResult.data.session;
+        const authUserId = session.user.id;
+        const now = new Date();
+
+        const db = await storage.getDb();
+        const existing = await db
+          .select({ id: adminsTable.id, email: adminsTable.email })
+          .from(adminsTable)
+          .where(eq(adminsTable.email, normalizedEmail))
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+        if (existing && existing.id !== authUserId) {
+          return res.status(400).json(
+            createErrorResponse(
+              ErrorCodes.DUPLICATE_EMAIL,
+              "Email already exists in local admin profiles with a different id. Clear/migrate your database before switching to Supabase Auth.",
+              "email"
+            )
+          );
+        }
+
+        if (existing) {
+          await db
+            .update(adminsTable)
+            .set({ name: payload.name, email: normalizedEmail, updatedAt: now })
+            .where(eq(adminsTable.id, existing.id));
+        } else {
+          await db.insert(adminsTable).values({
+            id: authUserId,
+            name: payload.name,
+            email: normalizedEmail,
+            passwordHash: "",
+            role: "admin",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+
+        return res.json({
+          token: session.access_token,
+          user: {
+            id: authUserId,
+            name: payload.name,
+            email: normalizedEmail,
+            role: "admin",
+          },
+        });
+      }
+
       const payload = adminCreateSchema.parse(req.body);
 
       if (!validateEmail(payload.email)) {
@@ -2551,6 +2860,92 @@ export function registerRoutes(app: express.Express) {
   // POST /api/auth/login - Universal login endpoint
   app.post("/api/auth/login", async (req: Request, res: Response) => {
     try {
+      if (isSupabaseConfigured()) {
+        const payload = loginSchema.parse(req.body);
+
+        if (!payload.email || !payload.password) {
+          return sendValidationError(res, "Email and password are required", "email");
+        }
+
+        const email = payload.email.trim().toLowerCase();
+        const supabase = createSupabaseAnonClient();
+        const signInResult = await supabase.auth.signInWithPassword({
+          email,
+          password: payload.password,
+        });
+
+        if (signInResult.error || !signInResult.data.session) {
+          return res
+            .status(401)
+            .json(createErrorResponse(ErrorCodes.INVALID_CREDENTIALS, "Invalid email or password"));
+        }
+
+        const session = signInResult.data.session;
+        const authUserId = session.user.id;
+
+        // Resolve the profile from our tables so the app keeps the same role routing.
+        const db = await storage.getDb();
+
+        const admin = await db
+          .select({ id: adminsTable.id, email: adminsTable.email, name: adminsTable.name })
+          .from(adminsTable)
+          .where(eq(adminsTable.id, authUserId))
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+        if (admin) {
+          return res.json({
+            token: session.access_token,
+            user: { id: admin.id, name: admin.name, email: admin.email, role: "admin" },
+          });
+        }
+
+        const employer = await db
+          .select({
+            id: employersTable.id,
+            email: employersTable.email,
+            name: employersTable.name,
+            establishmentName: employersTable.establishmentName,
+          })
+          .from(employersTable)
+          .where(eq(employersTable.id, authUserId))
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+        if (employer) {
+          return res.json({
+            token: session.access_token,
+            user: {
+              id: employer.id,
+              name: employer.name || employer.establishmentName || "Employer",
+              email: employer.email,
+              role: "employer",
+            },
+          });
+        }
+
+        const user = await db
+          .select({ id: usersTable.id, email: usersTable.email, firstName: usersTable.firstName, surname: usersTable.surname, role: usersTable.role })
+          .from(usersTable)
+          .where(eq(usersTable.id, authUserId))
+          .limit(1)
+          .then((rows: any[]) => rows[0]);
+        if (user) {
+          const fullName = `${user.firstName || ""} ${user.surname || ""}`.trim() || user.email;
+          return res.json({
+            token: session.access_token,
+            user: {
+              id: user.id,
+              name: fullName,
+              email: user.email,
+              role: (user.role as any) || "jobseeker",
+            },
+          });
+        }
+
+        return res
+          .status(401)
+          .json(createErrorResponse(ErrorCodes.UNAUTHORIZED, "User profile not found. Please sign up again."));
+      }
+
       const payload = loginSchema.parse(req.body);
 
       if (!payload.email || !payload.password) {
@@ -6082,17 +6477,17 @@ export function registerRoutes(app: express.Express) {
     { name: "bir2303File", maxCount: 1 },
     { name: "companyProfileFile", maxCount: 1 },
     { name: "doleCertificationFile", maxCount: 1 },
-  ]), (req: Request, res: Response) => {
+  ]), async (req: Request, res: Response) => {
     try {
       const files = req.files as { [fieldname: string]: Express.Multer.File[] };
       const fileMetadata: Record<string, any> = {};
 
       if (files) {
-        Object.entries(files).forEach(([fieldName, fileArray]) => {
+        for (const [fieldName, fileArray] of Object.entries(files)) {
           if (fileArray && fileArray[0]) {
-            fileMetadata[fieldName] = formatFileMetadata(fileArray[0]);
+            fileMetadata[fieldName] = await formatEmployerDocMetadata(fileArray[0]);
           }
-        });
+        }
       }
 
       return res.json({ files: fileMetadata });
@@ -6102,8 +6497,10 @@ export function registerRoutes(app: express.Express) {
     }
   });
 
-  // Static file serving for uploaded documents
-  app.use("/uploads/employer-documents", express.static(path.join(process.cwd(), "uploads", "employer-documents")));
+  // Static file serving for uploaded documents (local-disk mode only)
+  if (!process.env.SUPABASE_STORAGE_BUCKET) {
+    app.use("/uploads/employer-documents", express.static(path.join(process.cwd(), "uploads", "employer-documents")));
+  }
 
   // Create a new employer (SRS Form 2) with file uploads
   app.post("/api/employers", authMiddleware, adminOnly, async (req: Request, res: Response) => {

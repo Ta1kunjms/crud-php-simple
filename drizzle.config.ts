@@ -1,6 +1,8 @@
 import { defineConfig } from "drizzle-kit";
 
-const databaseUrl = process.env.DATABASE_URL || "file:./app.db";
+// For Supabase: prefer DIRECT_URL for migrations (port 5432, no pgbouncer),
+// then fall back to DATABASE_URL (can be pooled for runtime).
+const databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL || "file:./app.db";
 
 // Determine dialect based on DATABASE_URL
 const isPostgres = databaseUrl.startsWith("postgresql://");

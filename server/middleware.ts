@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from "express";
 import { verifyToken, JWTPayload, createErrorResponse, ErrorCodes } from "./auth";
+import { verifySupabaseAccessToken, isSupabaseConfigured } from "./supabase";
+import { storage } from "./storage";
+import { adminsTable, employersTable, usersTable } from "./unified-schema";
+import { eq } from "drizzle-orm";
 
 // ============ EXTEND EXPRESS REQUEST TYPE ============
 
@@ -14,7 +18,7 @@ declare global {
 
 // ============ AUTH MIDDLEWARE ============
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -28,8 +32,15 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
       );
     }
 
-    const payload = verifyToken(token);
-    if (!payload) {
+    // 1) Legacy JWT (existing system)
+    const legacyPayload = verifyToken(token);
+    if (legacyPayload) {
+      req.user = legacyPayload as unknown as User;
+      return next();
+    }
+
+    // 2) Supabase access token (new system)
+    if (!isSupabaseConfigured()) {
       return res.status(401).json(
         createErrorResponse(
           ErrorCodes.UNAUTHORIZED,
@@ -38,8 +49,89 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
       );
     }
 
-    req.user = payload as User;
-    next();
+    const supabasePayload = await verifySupabaseAccessToken(token);
+    const authUserId = supabasePayload.sub;
+    if (!authUserId) {
+      return res.status(401).json(
+        createErrorResponse(
+          ErrorCodes.UNAUTHORIZED,
+          "Invalid authentication token"
+        )
+      );
+    }
+
+    const db = await storage.getDb();
+
+    // Resolve role+profile from our application tables.
+    const admin = await db
+      .select({ id: adminsTable.id, email: adminsTable.email, name: adminsTable.name })
+      .from(adminsTable)
+      .where(eq(adminsTable.id, authUserId))
+      .limit(1)
+      .then((rows: any[]) => rows[0]);
+    if (admin) {
+      req.user = {
+        id: admin.id,
+        email: admin.email,
+        name: admin.name,
+        role: "admin",
+      } as unknown as User;
+      return next();
+    }
+
+    const employer = await db
+      .select({
+        id: employersTable.id,
+        email: employersTable.email,
+        name: employersTable.name,
+        establishmentName: employersTable.establishmentName,
+      })
+      .from(employersTable)
+      .where(eq(employersTable.id, authUserId))
+      .limit(1)
+      .then((rows: any[]) => rows[0]);
+    if (employer) {
+      req.user = {
+        id: employer.id,
+        email: employer.email,
+        name: employer.name || employer.establishmentName || "Employer",
+        role: "employer",
+        company: employer.establishmentName || undefined,
+      } as unknown as User;
+      return next();
+    }
+
+    const user = await db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        firstName: usersTable.firstName,
+        surname: usersTable.surname,
+        role: usersTable.role,
+        profileImage: usersTable.profileImage,
+      })
+      .from(usersTable)
+      .where(eq(usersTable.id, authUserId))
+      .limit(1)
+      .then((rows: any[]) => rows[0]);
+    if (user) {
+      const fullName = `${user.firstName || ""} ${user.surname || ""}`.trim() || user.email;
+      req.user = {
+        id: user.id,
+        email: user.email,
+        name: fullName,
+        role: (user.role as any) || "jobseeker",
+        profileImage: user.profileImage ?? null,
+      } as unknown as User;
+      return next();
+    }
+
+    return res.status(401).json(
+      createErrorResponse(
+        ErrorCodes.UNAUTHORIZED,
+        "User profile not found for this token"
+      )
+    );
   } catch (error) {
     return res.status(500).json(
       createErrorResponse(
